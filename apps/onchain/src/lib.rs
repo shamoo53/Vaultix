@@ -130,7 +130,7 @@ impl VaultixEscrow {
 
         // Transfer funds from depositor to contract
         let token_client = token::Client::new(&env, &token);
-        token_client.transfer(&depositor, &env.current_contract_address(), &total_amount);
+        token_client.transfer(&depositor, env.current_contract_address(), &total_amount);
 
         Ok(())
     }
