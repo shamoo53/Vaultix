@@ -721,13 +721,14 @@ fn test_fee_calculation_standard_amount() {
     let treasury = Address::generate(&env);
     client.initialize(&treasury, &Some(50));
 
-    // Setup token
-    let token_admin = Address::generate(&env);
-    let token_address = env.register_stellar_asset_contract_v2(token_admin.clone()).address();
-
     let depositor = Address::generate(&env);
     let recipient = Address::generate(&env);
+    let admin = Address::generate(&env);
     let escrow_id = 100u64;
+
+    // Create token contract and mint tokens
+    let (token_client, token_admin) = create_token_contract(&env, &admin);
+    token_admin.mint(&depositor, &10000);
 
     // Create escrow with 10000 amount
     let milestones = vec![
@@ -739,22 +740,17 @@ fn test_fee_calculation_standard_amount() {
         },
     ];
 
-    client.create_escrow(&escrow_id, &depositor, &recipient, &milestones);
-
-    // Mint tokens to contract
-    let token_client = token::StellarAssetClient::new(&env, &token_address);
-    token_client.mint(&contract_id, &10000);
+    client.create_escrow(&escrow_id, &depositor, &recipient, &milestones, &token_client.address);
 
     // Release milestone
-    client.release_milestone(&escrow_id, &0, &token_address);
+    client.release_milestone(&escrow_id, &0, &token_client.address);
 
     // Verify fee calculation: 10000 * 50 / 10000 = 50
-    let token = token::TokenClient::new(&env, &token_address);
     let expected_fee = 50;
     let expected_payout = 10000 - expected_fee; // 9950
 
-    assert_eq!(token.balance(&recipient), expected_payout);
-    assert_eq!(token.balance(&treasury), expected_fee);
+    assert_eq!(token_client.balance(&recipient), expected_payout);
+    assert_eq!(token_client.balance(&treasury), expected_fee);
 }
 
 #[test]
@@ -769,13 +765,14 @@ fn test_fee_calculation_small_amount() {
     let treasury = Address::generate(&env);
     client.initialize(&treasury, &Some(50));
 
-    // Setup token
-    let token_admin = Address::generate(&env);
-    let token_address = env.register_stellar_asset_contract_v2(token_admin.clone()).address();
-
     let depositor = Address::generate(&env);
     let recipient = Address::generate(&env);
+    let admin = Address::generate(&env);
     let escrow_id = 101u64;
+
+    // Create token contract and mint tokens
+    let (token_client, token_admin) = create_token_contract(&env, &admin);
+    token_admin.mint(&depositor, &10000);
 
     // Create escrow with small amount (100)
     let milestones = vec![
@@ -787,22 +784,17 @@ fn test_fee_calculation_small_amount() {
         },
     ];
 
-    client.create_escrow(&escrow_id, &depositor, &recipient, &milestones);
-
-    // Mint tokens to contract
-    let token_client = token::StellarAssetClient::new(&env, &token_address);
-    token_client.mint(&contract_id, &100);
+    client.create_escrow(&escrow_id, &depositor, &recipient, &milestones, &token_client.address);
 
     // Release milestone
-    client.release_milestone(&escrow_id, &0, &token_address);
+    client.release_milestone(&escrow_id, &0, &token_client.address);
 
     // Verify fee calculation: 100 * 50 / 10000 = 0 (rounds down)
-    let token = token::TokenClient::new(&env, &token_address);
     let expected_fee = 0;
     let expected_payout = 100 - expected_fee; // 100
 
-    assert_eq!(token.balance(&recipient), expected_payout);
-    assert_eq!(token.balance(&treasury), expected_fee);
+    assert_eq!(token_client.balance(&recipient), expected_payout);
+    assert_eq!(token_client.balance(&treasury), expected_fee);
 }
 
 #[test]
@@ -817,13 +809,14 @@ fn test_fee_calculation_large_amount() {
     let treasury = Address::generate(&env);
     client.initialize(&treasury, &Some(100));
 
-    // Setup token
-    let token_admin = Address::generate(&env);
-    let token_address = env.register_stellar_asset_contract_v2(token_admin.clone()).address();
-
     let depositor = Address::generate(&env);
     let recipient = Address::generate(&env);
+    let admin = Address::generate(&env);
     let escrow_id = 102u64;
+
+    // Create token contract and mint tokens
+    let (token_client, token_admin) = create_token_contract(&env, &admin);
+    token_admin.mint(&depositor, &1_000_000);
 
     // Create escrow with large amount
     let milestones = vec![
@@ -835,22 +828,17 @@ fn test_fee_calculation_large_amount() {
         },
     ];
 
-    client.create_escrow(&escrow_id, &depositor, &recipient, &milestones);
-
-    // Mint tokens to contract
-    let token_client = token::StellarAssetClient::new(&env, &token_address);
-    token_client.mint(&contract_id, &1_000_000);
+    client.create_escrow(&escrow_id, &depositor, &recipient, &milestones, &token_client.address);
 
     // Release milestone
-    client.release_milestone(&escrow_id, &0, &token_address);
+    client.release_milestone(&escrow_id, &0, &token_client.address);
 
     // Verify fee calculation: 1000000 * 100 / 10000 = 10000
-    let token = token::TokenClient::new(&env, &token_address);
     let expected_fee = 10_000;
     let expected_payout = 1_000_000 - expected_fee; // 990000
 
-    assert_eq!(token.balance(&recipient), expected_payout);
-    assert_eq!(token.balance(&treasury), expected_fee);
+    assert_eq!(token_client.balance(&recipient), expected_payout);
+    assert_eq!(token_client.balance(&treasury), expected_fee);
 }
 
 #[test]
@@ -865,13 +853,14 @@ fn test_fee_calculation_boundary_value() {
     let treasury = Address::generate(&env);
     client.initialize(&treasury, &Some(50));
 
-    // Setup token
-    let token_admin = Address::generate(&env);
-    let token_address = env.register_stellar_asset_contract_v2(token_admin.clone()).address();
-
     let depositor = Address::generate(&env);
     let recipient = Address::generate(&env);
+    let admin = Address::generate(&env);
     let escrow_id = 103u64;
+
+    // Create token contract and mint tokens
+    let (token_client, token_admin) = create_token_contract(&env, &admin);
+    token_admin.mint(&depositor, &10000);
 
     // Create escrow with boundary amount (200 - minimum for 1 unit fee)
     let milestones = vec![
@@ -883,22 +872,17 @@ fn test_fee_calculation_boundary_value() {
         },
     ];
 
-    client.create_escrow(&escrow_id, &depositor, &recipient, &milestones);
-
-    // Mint tokens to contract
-    let token_client = token::StellarAssetClient::new(&env, &token_address);
-    token_client.mint(&contract_id, &200);
+    client.create_escrow(&escrow_id, &depositor, &recipient, &milestones, &token_client.address);
 
     // Release milestone
-    client.release_milestone(&escrow_id, &0, &token_address);
+    client.release_milestone(&escrow_id, &0, &token_client.address);
 
     // Verify fee calculation: 200 * 50 / 10000 = 1
-    let token = token::TokenClient::new(&env, &token_address);
     let expected_fee = 1;
     let expected_payout = 200 - expected_fee; // 199
 
-    assert_eq!(token.balance(&recipient), expected_payout);
-    assert_eq!(token.balance(&treasury), expected_fee);
+    assert_eq!(token_client.balance(&recipient), expected_payout);
+    assert_eq!(token_client.balance(&treasury), expected_fee);
 }
 
 #[test]
@@ -913,13 +897,14 @@ fn test_multiple_milestone_releases_accumulate_fees() {
     let treasury = Address::generate(&env);
     client.initialize(&treasury, &Some(50));
 
-    // Setup token
-    let token_admin = Address::generate(&env);
-    let token_address = env.register_stellar_asset_contract_v2(token_admin.clone()).address();
-
     let depositor = Address::generate(&env);
     let recipient = Address::generate(&env);
+    let admin = Address::generate(&env);
     let escrow_id = 104u64;
+
+    // Create token contract and mint tokens
+    let (token_client, token_admin) = create_token_contract(&env, &admin);
+    token_admin.mint(&depositor, &10000);
 
     // Create escrow with multiple milestones
     let milestones = vec![
@@ -941,28 +926,22 @@ fn test_multiple_milestone_releases_accumulate_fees() {
         },
     ];
 
-    client.create_escrow(&escrow_id, &depositor, &recipient, &milestones);
-
-    // Mint tokens to contract
-    let token_client = token::StellarAssetClient::new(&env, &token_address);
-    token_client.mint(&contract_id, &10000);
-
-    let token = token::TokenClient::new(&env, &token_address);
+    client.create_escrow(&escrow_id, &depositor, &recipient, &milestones, &token_client.address);
 
     // Release first milestone: 5000 * 50 / 10000 = 25 fee
-    client.release_milestone(&escrow_id, &0, &token_address);
-    assert_eq!(token.balance(&recipient), 4975);
-    assert_eq!(token.balance(&treasury), 25);
+    client.release_milestone(&escrow_id, &0, &token_client.address);
+    assert_eq!(token_client.balance(&recipient), 4975);
+    assert_eq!(token_client.balance(&treasury), 25);
 
     // Release second milestone: 3000 * 50 / 10000 = 15 fee
-    client.release_milestone(&escrow_id, &1, &token_address);
-    assert_eq!(token.balance(&recipient), 4975 + 2985);
-    assert_eq!(token.balance(&treasury), 25 + 15);
+    client.release_milestone(&escrow_id, &1, &token_client.address);
+    assert_eq!(token_client.balance(&recipient), 4975 + 2985);
+    assert_eq!(token_client.balance(&treasury), 25 + 15);
 
     // Release third milestone: 2000 * 50 / 10000 = 10 fee
-    client.release_milestone(&escrow_id, &2, &token_address);
-    assert_eq!(token.balance(&recipient), 4975 + 2985 + 1990);
-    assert_eq!(token.balance(&treasury), 25 + 15 + 10);
+    client.release_milestone(&escrow_id, &2, &token_client.address);
+    assert_eq!(token_client.balance(&recipient), 4975 + 2985 + 1990);
+    assert_eq!(token_client.balance(&treasury), 25 + 15 + 10);
 }
 
 #[test]
@@ -977,13 +956,14 @@ fn test_zero_fee_configuration() {
     let treasury = Address::generate(&env);
     client.initialize(&treasury, &Some(0));
 
-    // Setup token
-    let token_admin = Address::generate(&env);
-    let token_address = env.register_stellar_asset_contract_v2(token_admin.clone()).address();
-
     let depositor = Address::generate(&env);
     let recipient = Address::generate(&env);
+    let admin = Address::generate(&env);
     let escrow_id = 105u64;
+
+    // Create token contract and mint tokens
+    let (token_client, token_admin) = create_token_contract(&env, &admin);
+    token_admin.mint(&depositor, &10000);
 
     let milestones = vec![
         &env,
@@ -994,19 +974,14 @@ fn test_zero_fee_configuration() {
         },
     ];
 
-    client.create_escrow(&escrow_id, &depositor, &recipient, &milestones);
-
-    // Mint tokens to contract
-    let token_client = token::StellarAssetClient::new(&env, &token_address);
-    token_client.mint(&contract_id, &10000);
+    client.create_escrow(&escrow_id, &depositor, &recipient, &milestones, &token_client.address);
 
     // Release milestone
-    client.release_milestone(&escrow_id, &0, &token_address);
+    client.release_milestone(&escrow_id, &0, &token_client.address);
 
     // Verify no fee collected
-    let token = token::TokenClient::new(&env, &token_address);
-    assert_eq!(token.balance(&recipient), 10000);
-    assert_eq!(token.balance(&treasury), 0);
+    assert_eq!(token_client.balance(&recipient), 10000);
+    assert_eq!(token_client.balance(&treasury), 0);
 }
 
 #[test]
@@ -1018,13 +993,14 @@ fn test_release_without_initialization() {
     let contract_id = env.register(VaultixEscrow, ());
     let client = VaultixEscrowClient::new(&env, &contract_id);
 
-    // Setup token
-    let token_admin = Address::generate(&env);
-    let token_address = env.register_stellar_asset_contract_v2(token_admin.clone()).address();
-
     let depositor = Address::generate(&env);
     let recipient = Address::generate(&env);
+    let admin = Address::generate(&env);
     let escrow_id = 106u64;
+
+    // Create token contract and mint tokens
+    let (token_client, token_admin) = create_token_contract(&env, &admin);
+    token_admin.mint(&depositor, &10000);
 
     let milestones = vec![
         &env,
@@ -1036,12 +1012,8 @@ fn test_release_without_initialization() {
     ];
 
     // Create escrow without initializing contract
-    client.create_escrow(&escrow_id, &depositor, &recipient, &milestones);
-
-    // Mint tokens to contract
-    let token_client = token::StellarAssetClient::new(&env, &token_address);
-    token_client.mint(&contract_id, &1000);
+    client.create_escrow(&escrow_id, &depositor, &recipient, &milestones, &token_client.address);
 
     // This should panic with Error #11 (TreasuryNotInitialized)
-    client.release_milestone(&escrow_id, &0, &token_address);
+    client.release_milestone(&escrow_id, &0, &token_client.address);
 }
