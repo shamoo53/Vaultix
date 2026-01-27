@@ -171,9 +171,9 @@ fn test_complete_escrow() {
         &token_client.address,
     );
 
-    // Release all milestones
-    client.release_milestone(&escrow_id, &0);
-    client.release_milestone(&escrow_id, &1);
+    // Buyer confirms delivery for all milestones
+    client.confirm_delivery(&escrow_id, &0, &depositor);
+    client.confirm_delivery(&escrow_id, &1, &depositor);
 
     // Complete the escrow
     client.complete_escrow(&escrow_id);
@@ -277,6 +277,10 @@ fn test_double_release() {
     let contract_id = env.register(VaultixEscrow, ());
     let client = VaultixEscrowClient::new(&env, &contract_id);
 
+    // Initialize treasury
+    let treasury = Address::generate(&env);
+    client.initialize(&treasury, &Some(50));
+
     let depositor = Address::generate(&env);
     let recipient = Address::generate(&env);
     let admin = Address::generate(&env);
@@ -302,9 +306,11 @@ fn test_double_release() {
         &milestones,
         &token_client.address,
     );
-    client.release_milestone(&escrow_id, &0);
+
+    // Release first time with fee deduction
+    client.release_milestone(&escrow_id, &0, &token_client.address);
     // This should panic with Error #4 (MilestoneAlreadyReleased)
-    client.release_milestone(&escrow_id, &0);
+    client.release_milestone(&escrow_id, &0, &token_client.address);
 }
 
 #[test]
@@ -346,7 +352,7 @@ fn test_too_many_milestones() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #11)")]
+#[should_panic(expected = "Error(Contract, #13)")]
 fn test_invalid_milestone_amount() {
     let env = Env::default();
     env.mock_all_auths();
@@ -372,7 +378,7 @@ fn test_invalid_milestone_amount() {
         },
     ];
 
-    // This should panic with Error #11 (ZeroAmount)
+    // This should panic with Error #13 (ZeroAmount)
     client.create_escrow(
         &escrow_id,
         &depositor,
@@ -628,4 +634,428 @@ fn test_valid_escrow_creation_succeeds() {
     assert_eq!(escrow.depositor, depositor);
     assert_eq!(escrow.recipient, recipient);
     assert_eq!(escrow.total_amount, 10000);
+}
+
+// ============================================================================
+// Platform Fee Tests
+// ============================================================================
+
+#[test]
+fn test_initialize_contract() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(VaultixEscrow, ());
+    let client = VaultixEscrowClient::new(&env, &contract_id);
+
+    let treasury = Address::generate(&env);
+
+    // Initialize with default fee
+    client.initialize(&treasury, &None);
+
+    let (stored_treasury, fee_bps) = client.get_config();
+    assert_eq!(stored_treasury, treasury);
+    assert_eq!(fee_bps, 50); // Default 0.5%
+}
+
+#[test]
+fn test_initialize_with_custom_fee() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(VaultixEscrow, ());
+    let client = VaultixEscrowClient::new(&env, &contract_id);
+
+    let treasury = Address::generate(&env);
+
+    // Initialize with custom fee (1%)
+    client.initialize(&treasury, &Some(100));
+
+    let (stored_treasury, fee_bps) = client.get_config();
+    assert_eq!(stored_treasury, treasury);
+    assert_eq!(fee_bps, 100);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #12)")]
+fn test_initialize_invalid_fee() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(VaultixEscrow, ());
+    let client = VaultixEscrowClient::new(&env, &contract_id);
+
+    let treasury = Address::generate(&env);
+
+    // Try to initialize with fee > 100% (should panic)
+    client.initialize(&treasury, &Some(10001));
+}
+
+#[test]
+fn test_update_fee() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(VaultixEscrow, ());
+    let client = VaultixEscrowClient::new(&env, &contract_id);
+
+    let treasury = Address::generate(&env);
+    client.initialize(&treasury, &Some(50));
+
+    // Update fee to 1%
+    client.update_fee(&100);
+
+    let (_, fee_bps) = client.get_config();
+    assert_eq!(fee_bps, 100);
+}
+
+#[test]
+fn test_fee_calculation_standard_amount() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(VaultixEscrow, ());
+    let client = VaultixEscrowClient::new(&env, &contract_id);
+
+    // Initialize with 0.5% fee (50 bps)
+    let treasury = Address::generate(&env);
+    client.initialize(&treasury, &Some(50));
+
+    let depositor = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let admin = Address::generate(&env);
+    let escrow_id = 100u64;
+
+    // Create token contract and mint tokens
+    let (token_client, token_admin) = create_token_contract(&env, &admin);
+    token_admin.mint(&depositor, &10000);
+
+    // Create escrow with 10000 amount
+    let milestones = vec![
+        &env,
+        Milestone {
+            amount: 10000,
+            status: MilestoneStatus::Pending,
+            description: symbol_short!("Work"),
+        },
+    ];
+
+    client.create_escrow(
+        &escrow_id,
+        &depositor,
+        &recipient,
+        &milestones,
+        &token_client.address,
+    );
+
+    // Release milestone
+    client.release_milestone(&escrow_id, &0, &token_client.address);
+
+    // Verify fee calculation: 10000 * 50 / 10000 = 50
+    let expected_fee = 50;
+    let expected_payout = 10000 - expected_fee; // 9950
+
+    assert_eq!(token_client.balance(&recipient), expected_payout);
+    assert_eq!(token_client.balance(&treasury), expected_fee);
+}
+
+#[test]
+fn test_fee_calculation_small_amount() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(VaultixEscrow, ());
+    let client = VaultixEscrowClient::new(&env, &contract_id);
+
+    // Initialize with 0.5% fee (50 bps)
+    let treasury = Address::generate(&env);
+    client.initialize(&treasury, &Some(50));
+
+    let depositor = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let admin = Address::generate(&env);
+    let escrow_id = 101u64;
+
+    // Create token contract and mint tokens
+    let (token_client, token_admin) = create_token_contract(&env, &admin);
+    token_admin.mint(&depositor, &10000);
+
+    // Create escrow with small amount (100)
+    let milestones = vec![
+        &env,
+        Milestone {
+            amount: 100,
+            status: MilestoneStatus::Pending,
+            description: symbol_short!("Small"),
+        },
+    ];
+
+    client.create_escrow(
+        &escrow_id,
+        &depositor,
+        &recipient,
+        &milestones,
+        &token_client.address,
+    );
+
+    // Release milestone
+    client.release_milestone(&escrow_id, &0, &token_client.address);
+
+    // Verify fee calculation: 100 * 50 / 10000 = 0 (rounds down)
+    let expected_fee = 0;
+    let expected_payout = 100 - expected_fee; // 100
+
+    assert_eq!(token_client.balance(&recipient), expected_payout);
+    assert_eq!(token_client.balance(&treasury), expected_fee);
+}
+
+#[test]
+fn test_fee_calculation_large_amount() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(VaultixEscrow, ());
+    let client = VaultixEscrowClient::new(&env, &contract_id);
+
+    // Initialize with 1% fee (100 bps)
+    let treasury = Address::generate(&env);
+    client.initialize(&treasury, &Some(100));
+
+    let depositor = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let admin = Address::generate(&env);
+    let escrow_id = 102u64;
+
+    // Create token contract and mint tokens
+    let (token_client, token_admin) = create_token_contract(&env, &admin);
+    token_admin.mint(&depositor, &1_000_000);
+
+    // Create escrow with large amount
+    let milestones = vec![
+        &env,
+        Milestone {
+            amount: 1_000_000,
+            status: MilestoneStatus::Pending,
+            description: symbol_short!("Large"),
+        },
+    ];
+
+    client.create_escrow(
+        &escrow_id,
+        &depositor,
+        &recipient,
+        &milestones,
+        &token_client.address,
+    );
+
+    // Release milestone
+    client.release_milestone(&escrow_id, &0, &token_client.address);
+
+    // Verify fee calculation: 1000000 * 100 / 10000 = 10000
+    let expected_fee = 10_000;
+    let expected_payout = 1_000_000 - expected_fee; // 990000
+
+    assert_eq!(token_client.balance(&recipient), expected_payout);
+    assert_eq!(token_client.balance(&treasury), expected_fee);
+}
+
+#[test]
+fn test_fee_calculation_boundary_value() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(VaultixEscrow, ());
+    let client = VaultixEscrowClient::new(&env, &contract_id);
+
+    // Initialize with 0.5% fee (50 bps)
+    let treasury = Address::generate(&env);
+    client.initialize(&treasury, &Some(50));
+
+    let depositor = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let admin = Address::generate(&env);
+    let escrow_id = 103u64;
+
+    // Create token contract and mint tokens
+    let (token_client, token_admin) = create_token_contract(&env, &admin);
+    token_admin.mint(&depositor, &10000);
+
+    // Create escrow with boundary amount (200 - minimum for 1 unit fee)
+    let milestones = vec![
+        &env,
+        Milestone {
+            amount: 200,
+            status: MilestoneStatus::Pending,
+            description: symbol_short!("Boundary"),
+        },
+    ];
+
+    client.create_escrow(
+        &escrow_id,
+        &depositor,
+        &recipient,
+        &milestones,
+        &token_client.address,
+    );
+
+    // Release milestone
+    client.release_milestone(&escrow_id, &0, &token_client.address);
+
+    // Verify fee calculation: 200 * 50 / 10000 = 1
+    let expected_fee = 1;
+    let expected_payout = 200 - expected_fee; // 199
+
+    assert_eq!(token_client.balance(&recipient), expected_payout);
+    assert_eq!(token_client.balance(&treasury), expected_fee);
+}
+
+#[test]
+fn test_multiple_milestone_releases_accumulate_fees() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(VaultixEscrow, ());
+    let client = VaultixEscrowClient::new(&env, &contract_id);
+
+    // Initialize with 0.5% fee (50 bps)
+    let treasury = Address::generate(&env);
+    client.initialize(&treasury, &Some(50));
+
+    let depositor = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let admin = Address::generate(&env);
+    let escrow_id = 104u64;
+
+    // Create token contract and mint tokens
+    let (token_client, token_admin) = create_token_contract(&env, &admin);
+    token_admin.mint(&depositor, &10000);
+
+    // Create escrow with multiple milestones
+    let milestones = vec![
+        &env,
+        Milestone {
+            amount: 5000,
+            status: MilestoneStatus::Pending,
+            description: symbol_short!("M1"),
+        },
+        Milestone {
+            amount: 3000,
+            status: MilestoneStatus::Pending,
+            description: symbol_short!("M2"),
+        },
+        Milestone {
+            amount: 2000,
+            status: MilestoneStatus::Pending,
+            description: symbol_short!("M3"),
+        },
+    ];
+
+    client.create_escrow(
+        &escrow_id,
+        &depositor,
+        &recipient,
+        &milestones,
+        &token_client.address,
+    );
+
+    // Release first milestone: 5000 * 50 / 10000 = 25 fee
+    client.release_milestone(&escrow_id, &0, &token_client.address);
+    assert_eq!(token_client.balance(&recipient), 4975);
+    assert_eq!(token_client.balance(&treasury), 25);
+
+    // Release second milestone: 3000 * 50 / 10000 = 15 fee
+    client.release_milestone(&escrow_id, &1, &token_client.address);
+    assert_eq!(token_client.balance(&recipient), 4975 + 2985);
+    assert_eq!(token_client.balance(&treasury), 25 + 15);
+
+    // Release third milestone: 2000 * 50 / 10000 = 10 fee
+    client.release_milestone(&escrow_id, &2, &token_client.address);
+    assert_eq!(token_client.balance(&recipient), 4975 + 2985 + 1990);
+    assert_eq!(token_client.balance(&treasury), 25 + 15 + 10);
+}
+
+#[test]
+fn test_zero_fee_configuration() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(VaultixEscrow, ());
+    let client = VaultixEscrowClient::new(&env, &contract_id);
+
+    // Initialize with 0% fee
+    let treasury = Address::generate(&env);
+    client.initialize(&treasury, &Some(0));
+
+    let depositor = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let admin = Address::generate(&env);
+    let escrow_id = 105u64;
+
+    // Create token contract and mint tokens
+    let (token_client, token_admin) = create_token_contract(&env, &admin);
+    token_admin.mint(&depositor, &10000);
+
+    let milestones = vec![
+        &env,
+        Milestone {
+            amount: 10000,
+            status: MilestoneStatus::Pending,
+            description: symbol_short!("NoFee"),
+        },
+    ];
+
+    client.create_escrow(
+        &escrow_id,
+        &depositor,
+        &recipient,
+        &milestones,
+        &token_client.address,
+    );
+
+    // Release milestone
+    client.release_milestone(&escrow_id, &0, &token_client.address);
+
+    // Verify no fee collected
+    assert_eq!(token_client.balance(&recipient), 10000);
+    assert_eq!(token_client.balance(&treasury), 0);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #11)")]
+fn test_release_without_initialization() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(VaultixEscrow, ());
+    let client = VaultixEscrowClient::new(&env, &contract_id);
+
+    let depositor = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let admin = Address::generate(&env);
+    let escrow_id = 106u64;
+
+    // Create token contract and mint tokens
+    let (token_client, token_admin) = create_token_contract(&env, &admin);
+    token_admin.mint(&depositor, &10000);
+
+    let milestones = vec![
+        &env,
+        Milestone {
+            amount: 1000,
+            status: MilestoneStatus::Pending,
+            description: symbol_short!("Test"),
+        },
+    ];
+
+    // Create escrow without initializing contract
+    client.create_escrow(
+        &escrow_id,
+        &depositor,
+        &recipient,
+        &milestones,
+        &token_client.address,
+    );
+
+    // This should panic with Error #11 (TreasuryNotInitialized)
+    client.release_milestone(&escrow_id, &0, &token_client.address);
 }
